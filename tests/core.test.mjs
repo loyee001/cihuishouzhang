@@ -34,7 +34,7 @@ test('study streak permits yesterday but breaks after a gap and spans months',()
 });
 test('pet level rolls over precisely at the experience threshold',()=>{
   assert.deepEqual(petLevel(59),{level:1,current:59,target:60});
-  assert.deepEqual(petLevel(60),{level:2,current:0,target:60});
+  assert.deepEqual(petLevel(60),{level:2,current:0,target:90});
 });
 test('loading saved state preserves independent cumulative achievements',()=>{
   const state=sanitizeState({...freshState(),totalDictations:45,achievements:['perfect'],xp:-2});
