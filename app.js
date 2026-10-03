@@ -1,5 +1,7 @@
 import { BOOKS, ALL_WORDS } from './books.js';
-import { STORAGE_KEY, freshState, sanitizeState, markLearned, todayKey, streak, petLevel, gradeAnswers, rewardOnce, selectBook, bookForRecord, recordsForBook, trimHistory, mergeSyncedState } from './core.js';
+import { STORAGE_KEY, freshState, sanitizeState, markLearned, todayKey, streak, petProgress, gradeAnswers, rewardOnce, selectBook, bookForRecord, recordsForBook, trimHistory, mergeSyncedState } from './core.js';
+import { petStage } from './pets.js';
+import { petPageView, petPreviewView } from './pet-view.js';
 
 const $ = selector => document.querySelector(selector);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -38,9 +40,29 @@ try {
     }
   }
 } catch {}
+let savedPetProgress = petProgress(state), pendingPetNotice = '';
 const pageNames = { learn: '单词新学', games: '单词游戏', dictation: '默写批改', pet: '我的宠物' };
-function save() { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); storageAvailable = true; return true; } catch { storageAvailable = false; toast('当前浏览器无法保存记录，请允许本地存储。'); return false; } }
-function toast(message) { clearTimeout(toastTimer); $('#toast').textContent = message; $('#toast').classList.add('visible'); toastTimer = setTimeout(() => $('#toast').classList.remove('visible'), 3200); }
+function save() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); storageAvailable = true;
+    const progress = petProgress(state);
+    if (progress.level > savedPetProgress.level) {
+      const evolved = petStage(progress.level).id !== petStage(savedPetProgress.level).id;
+      pendingPetNotice = evolved ? `${state.petName}进化成${petStage(progress.level).name}啦！Lv. ${progress.level}` : `${state.petName}升到 Lv. ${progress.level} 啦！`;
+      queueMicrotask(() => { if (pendingPetNotice) toast(''); });
+    }
+    savedPetProgress = progress;
+    return true;
+  } catch { storageAvailable = false; toast('当前浏览器无法保存记录，请允许本地存储。'); return false; }
+}
+function toast(message) {
+  clearTimeout(toastTimer);
+  const celebrating = Boolean(pendingPetNotice);
+  $('#toast').textContent = [message, pendingPetNotice].filter(Boolean).join(' · ');
+  pendingPetNotice = '';
+  $('#toast').classList.add('visible');
+  toastTimer = setTimeout(() => $('#toast').classList.remove('visible'), celebrating ? 6500 : 3200);
+}
 function unitWords() { return WORDS.filter(w => w.unit === state.unit); }
 function unit() { return UNITS.find(u => u.id === state.unit); }
 function wordIndex() { return Math.min(Math.max(0, Number(state.index[state.unit]) || 0), unitWords().length - 1); }
@@ -57,7 +79,9 @@ function speech(text) {
   utterance.onerror = event => { if (!['interrupted','canceled'].includes(event.error)) toast('发音暂不可用，请检查系统英语语音或稍后重试。'); };
   speechSynthesis.speak(utterance);
 }
-function petImage(cls = '') { return `<img class="pet-image ${cls}" src="assets/pet-dragon.png" alt="薄荷绿色小龙${esc(state.petName)}" onerror="this.hidden=true">`; }
+function petImage(cls = '', stage = petStage(petProgress(state).level)) {
+  return `<img class="pet-image ${cls}" src="${stage.image}" alt="${stage.name}形态的${esc(state.petName)}" width="1024" height="1024">`;
+}
 function header() {
   return `<header class="site-header"><a class="brand" href="#learn" aria-label="词汇手账首页"><strong class="journal-brand">词汇手账</strong><span class="brand-sub">英语学习 · 每天一点进步 ${icon('leaf')}</span></a><div class="handwritten brand-note">Small words,<br>big adventures.</div><nav class="tabs" aria-label="学习导航">${[['learn','book'],['games','game'],['dictation','pen'],['pet','paw']].map(([id,i]) => `<a class="tab ${route===id?'active':''}" href="#${id}" ${route===id?'aria-current="page"':''}>${icon(i)}<span>${pageNames[id]}</span></a>`).join('')}</nav><div class="header-note">每天一点点<br><span>把进步记下来</span><i>♡</i></div></header>`;
 }
@@ -84,8 +108,8 @@ function switchBook(bookId) {
   render();toast(`已切换到《${activeBook.title}》`);
 }
 function sidebar() {
-  const level=petLevel(state.xp), previous=currentHistory()[0];
-  return `<aside class="side-rail"><section class="paper-card companion"><div class="card-heading">${icon('paw')}<h2>我的学习伙伴</h2><a href="#pet" aria-label="查看我的宠物">···</a></div><div class="pet-stage">${petImage()}<span class="pet-bubble">今天也一起<br>变厉害吧！</span><span class="pet-shadow"></span></div><div class="pet-title"><strong>${esc(state.petName)}</strong><span class="level-tag">Lv. ${level.level}</span></div><div class="progress-label"><span>成长值</span><span>${level.current} / ${level.target}</span></div><div class="progress rose"><span style="width:${level.current/level.target*100}%"></span></div><p class="reward-note">${icon('gift')}学会一个词，获得 10 成长值</p></section><section class="paper-card result-note"><div class="card-heading">${icon('pen')}<h2>上次默写</h2></div>${previous?`<p class="last-score">${previous.correct}<span> / ${previous.total}</span></p><p class="muted">${esc(previous.unitName)} · ${esc(previous.date)}</p><button class="button line small" data-action="last-result">查看批改</button>`:`<p class="empty-score">第一份满分，等你来写</p><p class="muted">从 5 个单词开始试试吧</p><a class="button line small" href="#dictation">开始默写</a>`}</section><div class="sticky-note handwritten">A little progress<br>every day.<span>✧</span></div></aside>`;
+  const level=petProgress(state), previous=currentHistory()[0];
+  return `<aside class="side-rail"><section class="paper-card companion"><div class="card-heading">${icon('paw')}<h2>我的学习伙伴</h2><a href="#pet" aria-label="查看我的宠物">···</a></div><div class="pet-stage pet-aura ${petStage(level.level).id}">${petImage()}<span class="pet-bubble">今天也一起<br>变厉害吧！</span><span class="pet-shadow"></span></div><div class="pet-title"><strong>${esc(state.petName)}</strong><span class="level-tag">Lv. ${level.level}</span></div><div class="progress-label"><span>成长值</span><span>${level.current} / ${level.target}</span></div><div class="progress rose"><span style="width:${level.current/level.target*100}%"></span></div><p class="reward-note">${icon('gift')}学会一个词，获得 10 成长值</p></section><section class="paper-card result-note"><div class="card-heading">${icon('pen')}<h2>上次默写</h2></div>${previous?`<p class="last-score">${previous.correct}<span> / ${previous.total}</span></p><p class="muted">${esc(previous.unitName)} · ${esc(previous.date)}</p><button class="button line small" data-action="last-result">查看批改</button>`:`<p class="empty-score">第一份满分，等你来写</p><p class="muted">从 5 个单词开始试试吧</p><a class="button line small" href="#dictation">开始默写</a>`}</section><div class="sticky-note handwritten">A little progress<br>every day.<span>✧</span></div></aside>`;
 }
 function learnPage() {
   const word=currentWord(), words=unitWords(), n=wordIndex(), learned=state.learned.includes(word.id), today=dailyLearned();
@@ -129,9 +153,12 @@ function resultPage(record) {
   const wrong=record.results.filter(r=>!r.correct);
   return `<section class="paper-card correction-sheet"><div class="section-heading"><div><span class="eyebrow">YOUR WORDS, YOUR PROGRESS</span><h2>这一页，批改好了</h2></div><span class="grade-stamp">${record.correct===record.total?'A+':Math.round(record.correct/record.total*100)+'%'}</span></div><div class="correction-summary"><p class="result-big">${record.correct}<span> / ${record.total} 词</span></p><div><b>${wrong.length?`还有 ${wrong.length} 个词值得再练一遍`:'全对！给认真学习的自己一颗星'}</b><p>${esc(record.date)} · ${esc(record.unitName)}</p></div></div><div class="correction-list">${record.results.map((r,i)=>`<div class="correction-row ${r.correct?'correct':'incorrect'}"><span class="correction-status">${icon(r.correct?'check':'close')}</span><span class="correction-meaning"><small>${String(i+1).padStart(2,'0')}</small>${esc(r.zh)}</span><span class="correction-answer">${r.correct?`<b>${esc(r.answer)}</b>`:`<del>${esc(r.answer||'未作答')}</del><b>${esc(r.en)}</b>`}</span><button class="icon-button" data-action="result-speak" data-word="${esc(r.en)}" aria-label="朗读 ${esc(r.en)}">${icon('sound')}</button></div>`).join('')}</div><div class="center-actions">${wrong.length?'<button class="button primary" data-action="retry-wrong">'+icon('refresh')+'只练错词</button>':''}<button class="button secondary" data-action="new-dictation">开始新的默写</button></div></section>`;
 }
-function petPage() {
-  const level=petLevel(state.xp), learned=state.learned.length, badges=[{icon:'leaf',name:'第一片新叶',description:'学会第一个单词',earned:learned>=1},{icon:'book',name:'词汇收藏家',description:'累计学会 12 个词',earned:learned>=12},{icon:'star',name:'闪亮满分',description:'至少 5 词的全对默写',earned:state.achievements.includes('perfect')}];
-  return `${toolbar('GROW A LITTLE TOGETHER')}<div class="pet-layout"><section class="paper-card pet-home"><span class="label lavender">MY LITTLE COMPANION</span><div class="large-pet-stage">${petImage()}<span class="pet-hello handwritten">Hello, my friend! ♡</span></div><div class="pet-name-line"><h2>${esc(state.petName)}</h2><span class="level-tag">Lv. ${level.level}</span><button class="icon-button" data-action="rename-pet" aria-label="给宠物改名">${icon('pen')}</button></div><p class="pet-caption">${level.level<3?'刚刚发芽的友谊，正在慢慢长大。':level.level<6?'在你的陪伴下，小伙伴越来越有精神了。':'一起学过的每个单词，都藏在我们的故事里。'}</p><div class="pet-growth"><div class="progress-label"><span>距离下一级还差 ${60-level.current} 成长值</span><b>${level.current} / 60</b></div><div class="progress rose"><span style="width:${level.current/60*100}%"></span></div></div><button class="button primary" data-action="feed" ${state.treats<1?'disabled':''}>${icon('gift')}喂一份小点心 <span class="treat-count">${state.treats}</span></button><p class="form-hint">学会一个新词，获得一份点心；喂食增加 5 成长值。</p></section><div class="pet-details"><section class="paper-card"><div class="section-heading"><h2>我们一起的成长</h2>${icon('leaf')}</div><div class="pet-numbers"><div><strong>${learned}</strong><span>累计学会</span></div><div><strong>${state.totalDictations}</strong><span>完成默写</span></div><div><strong>${streak(Object.keys(state.activity))}</strong><span>连续学习 / 天</span></div></div></section><section class="paper-card badge-card"><div class="section-heading"><h2>小小成就墙</h2><span class="muted">${badges.filter(b=>b.earned).length} / 3</span></div><div class="badges">${badges.map(b=>`<div class="badge ${b.earned?'earned':''}"><span>${icon(b.icon)}</span><div><b>${b.name}</b><p>${b.description}</p></div><small>${b.earned?'已点亮':'待解锁'}</small></div>`).join('')}</div></section><section class="paper-card growth-tips"><span class="eyebrow">LITTLE STEPS COUNT</span><h2>每天一点点，就很好</h2><p>学习新词 <b>+10</b></p><p>默写正确 <b>+5</b></p><p>游戏配对 <b>+3</b></p><p>词义挑战 <b>+2</b></p><a href="#learn" class="button secondary">继续学单词</a></section></div></div>`;
+function petPage() { return petPageView(state, toolbar, icon, esc, petImage); }
+function previewPet(stageId) {
+  const content = petPreviewView(state, stageId, esc, petImage);
+  if (!content) return;
+  openDialog(content);
+  $('#dialog').classList.add('evolution-dialog');
 }
 function persistSession() { try { if(session) sessionStorage.setItem('think1-dictation-draft',JSON.stringify({...session,words:undefined,wordIds:session.words.map(w=>w.id)})); else sessionStorage.removeItem('think1-dictation-draft'); } catch {} }
 function startDictation(words,mode='meaning') { session={id:crypto.randomUUID(),book:state.book,words,mode,answers:{}};lastResult=null;persistSession();render();window.scrollTo({top:0,behavior:'smooth'}); }
@@ -156,12 +183,13 @@ function choosePair(button) {
   render();
 }
 function showResult(record) {if(!record)return;if(session){toast('请先完成或结束当前默写，再查看历史批改。');return;}loadBook(bookForRecord(record,BOOKS).id);lastResult=record;game=null;state.unit=UNITS.some(u=>u.id===record.unit)?record.unit:UNITS[0].id;state.bookUnits[state.book]=state.unit;save();session=null;persistSession();route='dictation';if(location.hash!=='#dictation')location.hash='dictation';else render();}
-function openDialog(content) { const el=$('#dialog'); el.classList.remove('bookshelf-dialog'); el.innerHTML=`<button class="icon-button dialog-close" data-action="close-dialog" aria-label="关闭">${icon('close')}</button>${content}`; el.showModal(); }
+function openDialog(content) { const el=$('#dialog'); el.classList.remove('bookshelf-dialog', 'evolution-dialog'); el.innerHTML=`<button class="icon-button dialog-close" data-action="close-dialog" aria-label="关闭">${icon('close')}</button>${content}`; el.showModal(); }
 document.addEventListener('change',event=>{if(event.target.id==='unit-select'){if(practiceActive()||!UNITS.some(u=>u.id===event.target.value)){render();return;}state.unit=event.target.value;state.bookUnits[state.book]=state.unit;game=null;lastResult=null;save();render();}});
 document.addEventListener('click', event=>{
   const button=event.target.closest('[data-action]'); if(!button) return;
   const action=button.dataset.action;
   if(action==='choose-books') bookShelf();
+  if(action==='preview-pet') previewPet(button.dataset.stage);
   if(action==='select-book') switchBook(button.dataset.book);
   if(action==='speak') speech(currentWord().en);
   if(action==='sentence-speak') speech(currentWord().example);
@@ -197,14 +225,16 @@ document.addEventListener('submit',event=>{
   if(event.target.id==='dictation-form'){event.preventDefault();const empty=session.words.filter(w=>!session.answers[w.id]?.trim()).length;if(empty)openDialog(`<h2>还有 ${empty} 题未填写</h2><p>提交后，空题会记为未答对。你可以返回继续填写。</p><div class="center-actions"><button class="button secondary" data-action="close-dialog">继续填写</button><button class="button primary" data-action="confirm-submit">仍然提交</button></div>`);else finishDictation();}
   if(event.target.id==='pet-name-form'){event.preventDefault();const name=new FormData(event.target).get('petName').trim();if(!name){toast('请写下一个名字。');return;}state.petName=name.slice(0,12);save();render();toast('小伙伴有新名字啦！');}
 });
-window.addEventListener('storage',event=>{if(event.key!==STORAGE_KEY||!event.newValue)return;try{state=mergeSyncedState(state,JSON.parse(event.newValue));loadBook(state.book);if(!$('#dialog')?.open&&!['INPUT','SELECT'].includes(document.activeElement?.tagName))render();}catch{}});
+window.addEventListener('storage',event=>{if(event.key!==STORAGE_KEY||!event.newValue)return;try{const incoming=JSON.parse(event.newValue);state=mergeSyncedState(state,incoming);loadBook(state.book);savedPetProgress=petProgress(state);if(incoming.version===1&&incoming.petGrowthVersion!==2)save();if(!$('#dialog')?.open&&!['INPUT','SELECT'].includes(document.activeElement?.tagName))render();}catch{}});
 window.addEventListener('hashchange',()=>{if(location.hash==='#main'){$('#main').focus();return;}route=location.hash.slice(1)||'learn';render();window.scrollTo({top:0,behavior:'instant'});});
 render();
+// Persist the one-time growth migration before another session reads this record.
+save();
 const modelContext=document.modelContext;
 if(modelContext?.registerTool){
   const lifecycle=new AbortController();
   for(const tool of [
-    {name:'get_learning_progress',title:'查看词汇学习进度',description:'Read the local vocabulary progress, pet level and most recent dictation score.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true},execute:()=>({book:state.book,title:activeBook.title,learned:WORDS.filter(w=>state.learned.includes(w.id)).length,total:WORDS.length,review:WORDS.filter(w=>state.review.includes(w.id)).length,pet:petLevel(state.xp),lastDictation:currentHistory()[0]?{correct:currentHistory()[0].correct,total:currentHistory()[0].total}:null})},
+    {name:'get_learning_progress',title:'查看词汇学习进度',description:'Read the local vocabulary progress, pet level and most recent dictation score.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true},execute:()=>({book:state.book,title:activeBook.title,learned:WORDS.filter(w=>state.learned.includes(w.id)).length,total:WORDS.length,review:WORDS.filter(w=>state.review.includes(w.id)).length,pet:petProgress(state),lastDictation:currentHistory()[0]?{correct:currentHistory()[0].correct,total:currentHistory()[0].total}:null})},
     {name:'open_learning_page',title:'打开学习页面',description:'Navigate to a study page without completing exercises or granting rewards.',inputSchema:{type:'object',properties:{page:{type:'string',enum:['learn','games','dictation','pet']}},required:['page'],additionalProperties:false},annotations:{readOnlyHint:false},execute:input=>{if(!input||!pageNames[input.page])throw new Error('Unknown page');route=input.page;location.hash=route;render();return{page:route,title:pageNames[route]};}}
   ]){try{Promise.resolve(modelContext.registerTool(tool,{signal:lifecycle.signal})).catch(()=>{});}catch{}}
   window.addEventListener('pagehide',()=>lifecycle.abort(),{once:true});

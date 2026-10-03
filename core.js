@@ -13,7 +13,9 @@ export function streak(dates, now = new Date()) {
   while (unique.has(todayKey(date))) { count++; date.setDate(date.getDate() - 1); }
   return count;
 }
-export function freshState() { return { version: 1, book: 'think1', bookUnits: {}, unit: 'u1', learned: [], review: [], activity: {}, xp: 0, treats: 0, petName: '小芽', history: [], totalDictations: 0, achievements: [], rewarded: [], index: {} }; }
+export function freshState() { return { version: 1, book: 'think1', bookUnits: {}, unit: 'u1', learned: [], review: [], activity: {}, xp: 0, petGrowthVersion: 2, petXpBonus: 0, treats: 0, petName: '小芽', history: [], totalDictations: 0, achievements: [], rewarded: [], index: {} }; }
+function nonNegativeInteger(value) { return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0; }
+function petThreshold(level) { return 15 * (level - 1) * (level + 2); }
 export function trimHistory(records) {
   const counts = new Map();
   return records.filter(record => {
@@ -28,6 +30,12 @@ export function sanitizeState(raw) {
   if (!raw || raw.version !== 1) return fresh;
   for (const key of ['learned', 'review', 'rewarded', 'achievements']) if (Array.isArray(raw[key])) fresh[key] = [...new Set(raw[key].filter(v => typeof v === 'string'))];
   for (const key of ['xp','treats']) if (Number.isFinite(raw[key])) fresh[key] = Math.max(0, Math.floor(raw[key]));
+  if (raw.petGrowthVersion === 2) fresh.petXpBonus = nonNegativeInteger(raw.petXpBonus);
+  else {
+    const oldLevel = 1 + Math.floor(fresh.xp / 60);
+    // Preserve the earned XP, old level and within-level progress during migration.
+    fresh.petXpBonus = petThreshold(oldLevel) - 60 * (oldLevel - 1);
+  }
   if (typeof raw.unit === 'string') fresh.unit = raw.unit;
   if (typeof raw.book === 'string') fresh.book = raw.book;
   if (raw.bookUnits && typeof raw.bookUnits === 'object' && !Array.isArray(raw.bookUnits)) fresh.bookUnits = Object.fromEntries(Object.entries(raw.bookUnits).filter(([id, unit]) => typeof unit === 'string' && !['__proto__','constructor','prototype'].includes(id)));
@@ -53,7 +61,15 @@ export function rewardOnce(state, token, amount) {
   if (state.rewarded.includes(token)) return false;
   state.rewarded.push(token); state.xp += amount; return true;
 }
-export function petLevel(xp) { return { level: 1 + Math.floor(xp / 60), current: xp % 60, target: 60 }; }
+export function petLevel(xp) {
+  const total = nonNegativeInteger(xp);
+  let level = Math.max(1, 1 + Math.floor((Math.sqrt(9 + (4 / 15) * total) - 3) / 2));
+  // Correct floating-point rounding when XP is exactly at a level boundary.
+  if (petThreshold(level) > total) level--;
+  else if (petThreshold(level + 1) <= total) level++;
+  return { level, current: total - petThreshold(level), target: 60 + 30 * (level - 1) };
+}
+export function petProgress(state) { return petLevel(nonNegativeInteger(state.xp) + nonNegativeInteger(state.petXpBonus)); }
 
 // Word and unit IDs are globally unique; existing Think 1 IDs stay unchanged.
 export function bookForRecord(record, books) {
@@ -73,6 +89,8 @@ export function recordsForBook(state, bookId, books) { return state.history.filt
 
 export function mergeSyncedState(current, raw) {
   const next = sanitizeState(raw);
+  // A still-open old tab must not recalculate an already granted migration bonus.
+  if (current.petGrowthVersion === 2 && raw?.version === 1 && raw.petGrowthVersion !== 2) next.petXpBonus = nonNegativeInteger(current.petXpBonus);
   next.book = current.book;
   next.unit = current.unit;
   // Keep this tab on its current card while accepting other chapters' positions.
